@@ -1,0 +1,82 @@
+import pyspark
+from pyspark.sql.functions import *
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, DoubleType, StringType
+from datetime import datetime,time
+spark=SparkSession.builder.appName('Assessment').getOrCreate() 
+
+
+#source data is read and temporary tables are created
+df_usa=spark.read.csv('C:/Users/USER/Documents/Incubyte DE Assessment/USA.csv',header='true')
+df_usa=df_usa.withColumn('CountryName',lit('USA'))
+df_usa.createOrReplaceTempView('table_usa')
+print('table_usa Table created successfully')
+
+df_ind=spark.read.csv('C:/Users/USER/Documents/Incubyte DE Assessment/IND.csv',header='true')
+df_ind=df_ind.withColumn('CountryName',lit('India'))
+df_ind.createOrReplaceTempView('table_ind')
+print('table_ind Table created successfully')
+
+df_aus=spark.read.csv('C:/Users/USER/Documents/Incubyte DE Assessment/AUS.csv',header='true')
+df_aus=df_aus.withColumn('CountryName',lit('Australia'))
+df_aus.createOrReplaceTempView('table_aus')
+print('table_aus Table created successfully')
+
+
+#If we have to read .xlsx file then below code can be used which uses pandas dataframe
+"""
+import pandas as pd
+df_pandas=pd.read_excel("C:/Users/USER/Documents/Incubyte DE Assessment/SampleInputData/AUS.xlsx" ,sheet_name="Sheet1")
+schema = StructType([StructField("Unique ID", StringType(), False), StructField("Patient Name", StringType(), True)
+                    , StructField("Vaccine Type", StringType(), True), StructField("Date of Birth", StringType(), True)
+                    , StructField("Date of Vaccination", StringType(), True) ])
+df_aus=spark.createDataFrame(df_pandas, schema=schema)
+"""
+
+
+#Final table is created by merging all the data sources, creating unique patient ID by adding prefix as AUS/IND/USA with the existing ID
+#and cleaning the column -VaccinationDate
+target_table="""select 'USA_'||ID as PatientID,
+                Name as PatientName,
+                trim(VaccinationType) as VaccinationType,
+                to_date(VaccinationDate,'mmddyyyy') as VaccinationDate,
+                CountryName
+            from table_usa
+            union all
+                select 'IND_'||ID as PatientID,
+                Name as PatientName,
+                trim(VaccinationType) as VaccinationType,
+                to_date(VaccinationDate,'dd-mm-yyyy') as VaccinationDate,
+                CountryName
+            from table_ind
+            union all
+                select 'AUS_'||`Unique ID` as PatientID,
+                `Patient Name` as PatientName,
+                trim(`Vaccine Type`) as VaccinationType,
+                to_date(`Date of Vaccination`,'dd-mm-yyyy') as VaccinationDate,
+                CountryName
+            from table_aus
+                """
+df_target=spark.sql(target_table)
+df_target.createOrReplaceTempView('final_table')
+print('final_table Table created successfully')
+
+
+#creating Metric 1
+metric1="""
+            select CountryName,VaccinationType,count(*) as `No. of vaccinations` from final_table group by CountryName,VaccinationType
+        """
+spark.sql(metric1).show()
+
+#creating Metric 2
+metric2="""
+            select CountryName, Count(*)/0.1 as `Percentage Vaccinated` from final_table group by CountryName
+        """
+spark.sql(metric2).show()
+
+#creating Metric 3
+metric3="""
+            with cte_1 as (select *,count(*) over() as totalcount from final_table)
+            select CountryName, count(*)/totalcount*100 as `Percentage Contribution` from cte_1 group by CountryName,totalcount
+        """
+spark.sql(metric3).show()
